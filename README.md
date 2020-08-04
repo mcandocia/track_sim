@@ -32,6 +32,12 @@ These should be float columns that can be positive or negative and have units of
 
 I recommend having the file encoded in ASCII/UTF-8.
 
+### Caveats
+
+* Self-similarity is calculated and should always be 1
+
+* Tracks outside of contiguous groups do not have their similarities calculated, as they would be 0 anyway. This may change in the future.
+
 ### Execution
 
 Simply run

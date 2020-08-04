@@ -239,7 +239,9 @@ def write_results_to_disk(
             'fn2': [k[1] for k in keys],
             'similarity': values
     }
+    cols = ['fn1','fn2','similarity']
     if dsimdata is not None:
+        cols+=['directional_similarity']
         source_data.update(
             {'directional_similarity': [dsimdata[k] for k in keys]}
         )
@@ -249,7 +251,7 @@ def write_results_to_disk(
 
     logger.info('Writing data to %s' % options['output_filename'])
 
-    df.to_csv(options['output_filename'], index=False)
+    df[cols].to_csv(options['output_filename'], index=False)
     
 
 if __name__=='__main__':
