@@ -100,7 +100,7 @@ class Group:
 
     def pairwise_iter(self):
         n_groups = len(self.members)
-        for i in range(n_groups-1):
+        for i in range(n_groups):
             for j in range(i, n_groups):
                 yield (self.members[i], self.members[j])
 
@@ -141,6 +141,7 @@ class GroupProcessor:
                 yield member1, member2
 
     def set_group_attributes(self):
+        logger.debug('setting all group attributes')
         for group in self.groups:
             group.set_attributes()
             
@@ -171,7 +172,7 @@ class GroupProcessor:
         can be made
         """
         if len(self.groups) <= 1:
-            return 0
+            halt=True
         halt = False
         n_groups = len(self.groups)
         group_idx = 0
@@ -237,6 +238,22 @@ class GroupProcessor:
                 ]
             )
         }
+
+    def inter_group_filename_pairs(self):
+        n_groups = len(self.groups)
+        all_pairs = set()
+        for i in range(n_groups-1):
+            for j in range(i+1, n_groups):
+                g1 = self.groups[i]
+                g2 = self.groups[j]
+                all_pairs.update(
+                    {
+                        (m1['filename'], m2['filename'])
+                        for m1 in g1.members
+                        for m2 in g2.members
+                    }
+                )
+        return all_pairs
         
                 
 def test():

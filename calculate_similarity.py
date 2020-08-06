@@ -9,6 +9,12 @@ from group_clusters import GroupProcessor
 
 PI = np.pi
 
+WEIGHTS_FUNC=lambda x, y: x * y
+
+def set_weights_func(func):
+    global WEIGHTS_FUNC
+    WEIGHTS_FUNC = func
+
 
 logger = Clogger('calculate_similarity.log')
 
@@ -28,11 +34,11 @@ def has_intersection(
         (bbox1['lat'][1] < bbox2['lat'][0]) or
         (bbox1['lat'][0] > bbox2['lat'][1]) or
         (bbox1['long'][1] < bbox2['long'][0]) or
-        (bbox1['long'][0] > bbox2['long'][0])
+        (bbox1['long'][0] > bbox2['long'][1])
     )
 
 
-def calculate_similarities(data, grouper):
+def calculate_similarities(data, grouper, options={}):
     logger.info('Calculating similarities...')
     similarities = {}
     counter = 0
@@ -48,12 +54,13 @@ def calculate_similarities(data, grouper):
         else:
             similarities[key] = calculate_similarity(
                 member1,
-                member2
+                member2,
+                options
             )
         counter+=1
         if counter % 1000 == 0:
             logger.debug(
-                'Calculated %d directional similarities (%d default zero-valued)' % (
+                'Calculated %d similarities (%d default zero-valued)' % (
                     counter,
                     zero_counter
                 )
@@ -157,7 +164,7 @@ def rasterize(data, grouper):
                 # main rasterization
                 # if update not detected
                 for md in range(c.RASTER_MANHATTAN_DISTANCE_MAX+1):
-                    weight = c.RASTER_DECAY_FACTOR ** md
+                    weight = c.RASTER_FUNCTION(c.RASTER_DECAY_FACTOR, md)
                     for lat_bin_offset, long_bin_offset in diamond_generator(md):
                         rkey = (lat_bin+lat_bin_offset, long_bin+long_bin_offset)
                         if (
@@ -168,6 +175,11 @@ def rasterize(data, grouper):
                             raster_dict[rkey]['last_update'] = pk
                             raster_dict[rkey]['sum_weight'] += weight
                             raster_dict[rkey]['last_weight'] = weight
+                            if weight==1:
+                                raster_dict[rkey]['sum_unit_weight'] += 1
+                                raster_dict[rkey]['last_weight_unit'] = True
+                            else:
+                                raster_dict[rkey]['last_weight_unit'] = False
                         elif (
                                 # in case higher weight is encountered within time frame
                                 raster_dict[rkey]['last_weight'] < weight
@@ -176,6 +188,12 @@ def rasterize(data, grouper):
                             raster_dict[rkey]['last_update'] = pk
                             raster_dict[rkey]['last_weight'] = weight
                             raster_dict[rkey]['weight'] += weight - prev_weight
+                            if weight==1:
+                                raster_dict[rkey]['sum_unit_weight'] += 1
+                                raster_dict[rkey]['last_weight_unit'] = True
+                            else:
+                                raster_dict[rkey]['last_weight_unit'] = False                            
+
                             
 
             # final processing to wrap up loose ends
@@ -250,7 +268,7 @@ def rasterize_directional(data, grouper):
                 # main rasterization
                 # if update not detected
                 for md in range(c.RASTER_MANHATTAN_DISTANCE_MAX+1):
-                    weight = c.RASTER_DECAY_FACTOR ** md
+                    weight = c.RASTER_FUNCTION(c.RASTER_DECAY_FACTOR, md)
                     for lat_bin_offset, long_bin_offset in diamond_generator(md):
                         rkey = (lat_bin+lat_bin_offset, long_bin+long_bin_offset)
                         # if the last track has been wrapped up (will only be default here
@@ -329,45 +347,90 @@ def rasterize_directional(data, grouper):
     logger.debug('Processed %d total' % n_processed)
 
         
-def calculate_norms(data):
+def calculate_norms(data, options={}):
+    center_wt = options.get('weight_center_only', False)
     for fn, member in data.items():
         sum_weights_squared = 0
+        sum_unit_weights = 0            
         for rkey, data in member['raster_dict'].items():
             sum_weights_squared += data['sum_weight'] ** 2
+            if center_wt:
+                sum_unit_weights += data['sum_unit_weight']
         member['raster_norm'] = sum_weights_squared
+        member['raster_unit_norm'] = sum_unit_weights
 
-def calculate_directional_norms(data):
+def calculate_directional_norms(data, options={}):
+    center_wt = options.get('weight_center_only', False)
     for fn, member in data.items():
         sum_weights_squared = 0
+        sum_unit_weights = 0
         for rkey, data in member['directional_raster_dict'].items():
             for weight in data['weight_history']:
                 sum_weights_squared += weight ** 2
-        member['raster_directional_norm'] = sum_weights_squared        
+                if center_wt:
+                    if weight == 1:
+                        sum_unit_weights += 1
+                        
+        member['raster_directional_norm'] = sum_weights_squared
+        member['raster_directional_unit_norm'] = sum_unit_weights
 
 
-def calculate_similarity(r1, r2):
+def calculate_similarity(r1, r2, options={}):
     # find similar rkeys
 
     keys1 = r1['rkeys']
     keys2 = r2['rkeys']
+
+    center_wt = options.get('weight_center_only', False)
+    if center_wt:
+        r1_stat = 'sum_unit_weight'
+        norm_stat = 'raster_unit_norm'
+        # norm ratio can help give a ceiling to 
+        norm_ratio = r2[norm_stat]/r1[norm_stat]
+    else:
+        r1_stat = 'sum_weight'
+        norm_stat='raster_norm'
 
     sum_weight_product = 0
     for key in keys1.intersection(keys2):
-        sum_weight_product += (
-            r1['raster_dict'][key]['sum_weight'] *
-            r2['raster_dict'][key]['sum_weight']
-        )
+        if center_wt:
+            sum_weight_product += (
+                WEIGHTS_FUNC(
+                    r1['raster_dict'][key][r1_stat],
+                    min(
+                        r2['raster_dict'][key]['sum_weight'],
+                        r1['raster_dict'][key][r1_stat] * norm_ratio,
+                    ),
+                )
+            )
+        else:
+            sum_weight_product += (
+                WEIGHTS_FUNC(
+                    r1['raster_dict'][key][r1_stat],
+                    r2['raster_dict'][key]['sum_weight'],
+                )
+            )            
 
-    similarity = sum_weight_product / np.sqrt(r1['raster_norm']*r2['raster_norm'])
+    if center_wt:
+        # problem: self-similarity can increase score quite a bit
+        similarity = sum_weight_product / np.sqrt(r1[norm_stat]*r2[norm_stat])
+    else:
+        similarity = sum_weight_product / np.sqrt(r1[norm_stat]*r2[norm_stat])
     return similarity
 
     
-def calculate_directional_similarity(r1, r2):
+def calculate_directional_similarity(r1, r2, options={}):
 
     # find similar rkeys
 
     keys1 = r1['rkeys']
     keys2 = r2['rkeys']
+    
+    center_wt = options.get('weight_center_only', False)
+    if center_wt:
+        norm_stat = 'raster_directional_unit_norm'
+    else:
+        norm_stat='raster_directional_norm'    
 
     sum_weight_product = 0
     for key in keys1.intersection(keys2):
@@ -378,23 +441,25 @@ def calculate_directional_similarity(r1, r2):
 
         # truncated data will not have any further contributions
         for w1, w2, a1, a2 in zip(weights1, weights2, angles1, angles2):
+            # skip non-unit weights for first weight
+            if center_wt and w1 != 1:
+                continue
             cosine_sim = np.cos(a1-a2)
-            sum_weight_product += cosine_sim * w1 * w2
+            sum_weight_product += cosine_sim * WEIGHTS_FUNC(w1, w2)
         
         #
-        
         #sum_weight_product += (
         #    r1['raster_dict'][key]['sum_weight'] *
         #    r2['raster_dict'][key]['sum_weight']
         #)
 
     similarity = sum_weight_product / np.sqrt(
-        r1['raster_directional_norm']*r2['raster_directional_norm']
+        r1[norm_stat]*r2[norm_stat]
     )
     
     return similarity
 
-def calculate_directional_similarities(data, grouper):
+def calculate_directional_similarities(data, grouper, options={}):
     logger.info('Calculating directional similarities...')
     similarities = {}
     counter = 0
@@ -410,7 +475,8 @@ def calculate_directional_similarities(data, grouper):
         else:
             similarities[key] = calculate_directional_similarity(
                 member1,
-                member2
+                member2,
+                options,
             )
         counter+=1
         if counter % 1000 == 0:

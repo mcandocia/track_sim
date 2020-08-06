@@ -29,6 +29,7 @@ from calculate_similarity import calculate_similarities
 from calculate_similarity import calculate_directional_similarities
 from calculate_similarity import calculate_norms
 from calculate_similarity import calculate_directional_norms
+from calculate_similarity import set_weights_func
 
 from group_clusters import GroupProcessor
 
@@ -67,6 +68,30 @@ def get_options():
         default=0,
         help='Take top N records of data instead of all data'
     )
+
+    # averaging weights cannot produce sums > 1 mathematically
+    parser.add_argument(
+        '--weight-smooth',
+        action='store_true',
+        help='Take average of both weights (if both nonzero) when '
+        'comparing raster cells, rather than each weight as is. This '
+        'should result in higher similarities.'
+    )
+
+    parser.add_argument(
+        '--weight-center-only',
+        action='store_true',
+        help='Do not use any weights outside of center to calculate '
+        'norm or similarity (first center for similarity).'
+    )
+        
+
+
+    parser.add_argument(
+        '--add-inter-group-pairs',
+        action='store_true',
+        help='Add inter-group pairs (all 0s) to the resulting output file'
+    )
     
 
     parser.add_argument(
@@ -74,6 +99,28 @@ def get_options():
         help='Do not filter out input filenames',
         action='store_true',
     )
+
+    parser.add_argument(
+        '--truncate-file-path',
+        action='store_true',
+        help='Truncate the path portion of filenames. This happens '
+        'before joining to map file if map file is used.'
+    )
+
+    parser.add_argument(
+        '--map-filename',
+        default=None,
+        required=False,
+        help='A filename of a CSV with columns "filename" and "id"to map back to output data',
+    )
+
+    parser.add_argument(
+        '--remove-filenames',
+        action='store_true',
+        help='Remove filenames from output file. Only '
+        'recommended if used with "--map-filename"'
+    )
+    
 
     args = parser.parse_args()
 
@@ -88,7 +135,10 @@ def get_options():
 
     if options['head'] > 0:
         logger.warn('Only taking top %d files' % options['head'])
-        options['files'] = options['files'][:options['head']]        
+        options['files'] = options['files'][:options['head']]
+
+    if options['weight_smooth']:
+        set_weights_func(lambda x, y: ((x+y)/2) ** 2)
     
     return options
 
@@ -166,10 +216,13 @@ def add_directions(data, options):
 def main(options):
     # load all files into memory brrrrr
     logger.info('loading data')
+
+        
     data = {
         fn: pd.read_csv(fn)[['position_long','position_lat','timestamp','distance','timezone']]
         for fn in options['files']
     }
+
 
     filter_bad_data(
         options['files'],
@@ -177,6 +230,7 @@ def main(options):
     )
 
     logger.info('Creating metadata')
+
     metadata = {
         fn: get_metadata(data[fn], fn)
         for fn in options['files']
@@ -197,18 +251,24 @@ def main(options):
     # applies rasterization to grouper->groups->members objects
     rasterize(data, grouper)
 
-    calculate_norms(metadata)
-    similarity_data = calculate_similarities(data, grouper)
+    calculate_norms(metadata, options)
+    similarity_data = calculate_similarities(
+        data,
+        grouper,
+        options,
+    )
     logger.info('Calculated similarities')
 
     if options['add_directional_similarity']:
         rasterize_directional(data, grouper)
-        calculate_directional_norms(metadata)
+        calculate_directional_norms(metadata, options)
             
         directional_similarity_data = calculate_directional_similarities(
             data,
             grouper,
+            options,
         )
+        
         logger.info('Calculated directional similarities')
 
     else:
@@ -217,7 +277,8 @@ def main(options):
     write_results_to_disk(
         similarity_data,
         directional_similarity_data,
-        options
+        options,
+        grouper
     )
 
 
@@ -230,6 +291,7 @@ def write_results_to_disk(
         simdata,
         dsimdata,
         options,
+        grouper
 ):
     # get unique pairs
     keys, values = zip(*simdata.items())
@@ -239,7 +301,10 @@ def write_results_to_disk(
             'fn2': [k[1] for k in keys],
             'similarity': values
     }
-    cols = ['fn1','fn2','similarity']
+    cols = []
+    if not options['remove_filenames']:
+        cols.extend(['fn1','fn2',])
+    cols.extend(['similarity'])
     if dsimdata is not None:
         cols+=['directional_similarity']
         source_data.update(
@@ -248,6 +313,63 @@ def write_results_to_disk(
     df = pd.DataFrame(
         source_data
     )
+
+    if options['add_inter_group_pairs']:
+        logger.info('Adding inter-group pairs')
+        filename_pairs = list(grouper.inter_group_filename_pairs())
+        inter_pair_df = pd.DataFrame({
+            'fn1': [x[0] for x in filename_pairs],
+            'fn2': [x[1] for x in filename_pairs],
+        })
+        inter_pair_df['similarity'] = 0
+        if dsimdata is not None:
+            inter_pair_df['directional_similarity'] = 0
+        df = df.append(
+            inter_pair_df,
+            ignore_index=True
+        )
+
+    if options['truncate_file_path']:
+        sub_regex = re.compile(r'.*/')
+        df['fn1'] = df['fn1'].str.replace(sub_regex,'')
+        df['fn2'] = df['fn2'].str.replace(sub_regex,'')
+
+    if options['map_filename']:
+        cols.extend(['id1','id2'])
+        logger.info('Attempting map of column filenames with external CSV')
+        try:
+            map_df = pd.read_csv(options['map_filename'])
+        except Exception as e:
+            logger.error('Could not find file %s' % ascii(options['map_filename']))
+            map_df = None
+
+        if map_df is None:
+            map_df = pd.DataFrame({})
+        elif 'filename' not in map_df.columns or 'id' not in columns:
+            logger.error('Cannot find "id" or "filename" columns in map file. Skipping')
+        else:
+            try:
+                logger.info('merging df with map file')
+                map_df = map_df[['filename','id']]
+                df = df.merge(
+                    map_df.rename({'id':'id1'}),
+                    how='left',
+                    left_on='fn1',
+                    right_on='filename'
+                )
+                df = df.merge(
+                    map_df.rename({'id':'id2'}),
+                    how='left',
+                    left_on='fn2',
+                    right_on='filename'
+                )
+                logger.info('merged df and map')
+                    
+                    
+            except Exception as e:
+                logger.error(str(e))
+                logger.error('Could not map IDs back to file')
+                
 
     logger.info('Writing data to %s' % options['output_filename'])
 
