@@ -25,7 +25,7 @@ RASTER_MANHATTAN_DISTANCE_MAX=4
 
 RASTER_METHOD='custom'
 
-CUSTOMER_RASTER_PROFILE = [1, 0.95, 0.9, 0.85, 0.1]
+CUSTOM_RASTER_PROFILE = [1, 0.95, 0.9, 0.85, 0.1]
 
 # this changes decay profile of rasters
 # x = RASTER_DECAY_FACTOR
@@ -38,7 +38,7 @@ RASTER_FUNCTIONS = {
     'normal': lambda x, y: np.exp(-y ** 2 / (2 * x)),
     'cosine': lambda x, y: np.cos(y * PI / x),
     'near_intersect': lambda x, y: 1 - (y > 0) * (1-x),
-    'custom': lambda x, y: CUSTOMER_RASTER_PROFILE[y],
+    'custom': lambda x, y: CUSTOM_RASTER_PROFILE[y],
 }
 
 RASTER_FUNCTION = RASTER_FUNCTIONS[RASTER_METHOD]
