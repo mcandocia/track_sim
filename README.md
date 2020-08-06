@@ -54,6 +54,20 @@ to include directional similarity, as well as
 
 to test the script out on a smaller number of files.
 
+Other arguments:
+
+* `--truncate-file-path` - Only use filename, not folder/full path, in the output file.
+
+* `--map-filename` - A filename of a CSV with columns "filename" and "id" to map to output data.
+
+* `--remove-filenames` - Remove filenames from output file. I only recommend this if you have `--map-filename` specified.
+
+* `--no-filter` - Do not filter out `*laps*` or `*starts*`-patterned files. 
+
+* `--weight-smooth` - Uses square of average of nonzero weights rather than multiplying them to increase similarity and effects of overlap.
+
+* `--weight-center-only` - EXPERIMENTAL. Requires a weight of 1 in at least 1 track when computing similarities, but has issues when comparing events that have a lot of tightly interwoven paths (e.g., running on a pill-shaped track). I can't quite get the effect to work well, especially for non-directional. Workaround: set `--weight-smooth` and use a max manhattan distance of 4 with large weights, except for the last one, possibly. Make sure that the bin size is 20-40 meters. This is analagous to measuring the overlap of two slightly off-center markers on a sheet of paper.
+
 ## Algorithm (General)
 
 The script has a few main steps:
@@ -83,9 +97,15 @@ Some constants in `constants.py` can be adjusted for different behavior.
 
 * `RASTER_SIZE_M` - This is the size of the raster grid in meters. Smaller values will yield more precise results, which might work even better given a larger manhattan distance, but will also be somewhat slower.
 
-* `RASTER_DECAY_FACTOR` - This is the decay factor when calculating weights for cells further from the main raster. Each unit of (Manhattan) distance multiplies the weight by this factor.
+* `RASTER_DECAY_FACTOR` - This is the decay factor when calculating weights for cells further from the main raster. Each unit of (Manhattan) distance multiplies the weight by this factor. For some raster functions, this behaves in a separate way.
 
 * `RASTER_MANHATTAN_DISTANCE_MAX` - The maximum Manhattan distance to use to calculate weighted values of the raster. This can greatly increase computation time, as it quadratically increases the size of data stored, as well as increasing the size of bounding boxes.
+
+* `RASTER_METHOD` - Method of handling raster weights. This is a string that is a key in `RASTER_FUNCTIONS`
+
+* `CUSTOM_RASTER_PROFILE` - custom-defined weights by index of Manhattan distance. Length must be one greater than max Manhattan distance if `RASTER_METHOD='custom'`
+
+* `RASTER_FUNCTIONS` - Functions used to determine weights. First argument is the decay rate, the second argument is the distance.
 
 Other values in `constants.py` are meant to be calculated by the file and not be touched by the user.
 
