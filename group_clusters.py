@@ -3,6 +3,7 @@ from collections import Counter
 import json
 import numpy as np
 from utility import Clogger
+import pandas as pd
 
 logger = Clogger('group_clusters.log')
 
@@ -98,6 +99,9 @@ class Group:
             ),
         }
 
+    def to_df(self):
+        return pd.DataFrame([self.summary()])
+
     def pairwise_iter(self):
         n_groups = len(self.members)
         for i in range(n_groups):
@@ -109,6 +113,35 @@ class Group:
             print(json.dumps(self.summary(), indent=2))
         except:
             print((self.summary()))
+
+    def make_raster_dfs(
+            self,
+            group_idx=-1
+    ):
+        df_list = []
+
+        member_id_df = pd.DataFrame([
+            {
+                'member_id': i,
+                'filename': member['filename']
+            }
+            for i, member in enumerate(self.members)
+        ])
+
+        for i, member in enumerate(self.members):
+            df = member['rasterization'].copy()
+            df['member_id'] = i
+            df['group_id'] = group_idx
+            df_list.append(df)
+            
+
+        return {
+            'members': pd.concat(df_list, ignore_index=True).reset_index(),
+            'members_id': member_id_df,
+        }
+            
+                
+            
 
 ## TODO: FIGURE OUT WHY FIRST ATTEMPTED MATCH HAS A
 ## STRING AS THE FIRST MEMBER ARGUMENT (WHICH IS A RANDOM
@@ -254,6 +287,47 @@ class GroupProcessor:
                     }
                 )
         return all_pairs
+
+    def groups_to_df_dict(self):
+        member_dataframes = []
+        group_dataframes = []
+        member_id_dataframes = []
+        for i, group in enumerate(self.groups):
+            
+            member_df_dict = group.make_raster_dfs(
+                group_idx=i,
+            )
+
+            member_dataframes.append(
+                member_df_dict['members']
+            )
+
+            member_id_dataframes.append(
+                member_df_dict['members_id']
+            )
+            
+
+            group_dataframes.append(
+                group.to_df()
+            )
+
+        #print(member_dataframes)            
+        # data for each member
+        members_df =  pd.concat(member_dataframes, ignore_index=True).reset_index()
+
+        # members ID
+        members_id_df = pd.concat(member_id_dataframes, ignore_index=True).reset_index()
+
+        # data describing groups
+        groups_df = pd.concat(group_dataframes, ignore_index=True).reset_index()
+
+        return {
+            'groups': groups_df,
+            'members': members_df,
+            'members_ids': members_id_df,
+        }
+
+        
         
                 
 def test():

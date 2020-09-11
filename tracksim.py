@@ -86,12 +86,13 @@ def get_options():
     )
         
 
-
+    '''
     parser.add_argument(
         '--add-inter-group-pairs',
         action='store_true',
         help='Add inter-group pairs (all 0s) to the resulting output file'
     )
+    '''
     
 
     parser.add_argument(
@@ -120,11 +121,89 @@ def get_options():
         help='Remove filenames from output file. Only '
         'recommended if used with "--map-filename"'
     )
-    
+
+    parser.add_argument(
+        '--rasterized-output-prefix',
+        default=None,
+        required=False,
+        help='Filename prefix for rasters built (including directional)'
+    )
+
+    # raster parameters
+    parser.add_argument(
+        '--raster-method',
+        choices=['','custom','exponential','power','linear','cosine','near_intersect','normal'],
+        default='',
+        required=False,
+        help='Method for raster weighting. Default is value from constants.py',
+        dest='RASTER_METHOD'
+    )
+
+    parser.add_argument(
+        '--angle-lag-seconds',
+        default=None,
+        type=int,
+        required=False,
+        help='Lag used for calculating angles of path',
+        dest='ANGLE_LAG_SECONDS'
+    )
+
+    parser.add_argument(
+        '--raster-cooldown-interval',
+        default=None,
+        type=int,
+        required=False,
+        help='Amount of "cooldown" time before a new raster path '
+        'is registered over a previously-traversed one',
+        dest='RASTER_COOLDOWN_INTERVAL'
+    )
+
+    parser.add_argument(
+        '--raster-size-m',
+        default=None,
+        type=float,
+        help='Raster grid size in meters',
+        dest='RASTER_SIZE_M'
+    )
+
+    parser.add_argument(
+        '--raster-decay-factor',
+        default=None,
+        type=float,
+        help='Decay factor for certain raster functions',
+        dest='RASTER_DECAY_FACTOR'
+    )
+
+    parser.add_argument(
+        '--raster-manhattan-distance-max',
+        default=None,
+        type=int,
+        help='Maximum distance for raster calculations in '
+        'terms of grid units',
+        dest='RASTER_MANHATTAN_DISTANCE_MAX'
+    )
+
+    parser.add_argument(
+        '--custom-raster-profile',
+        type=float,
+        nargs='*',
+        default=[],
+        required=False,
+        help='Weights used for custom raster method. '
+        'First should be 1 if provided.',
+        dest='CUSTOM_RASTER_PROFILE',
+    )
+        
 
     args = parser.parse_args()
 
     options = vars(args)
+
+    update_constants(options)
+            
+
+    # this should be true always
+    options['add_inter_group_pairs'] = True
 
     # filter out start/lap files
     if not options['no_filter']:
@@ -141,6 +220,28 @@ def get_options():
         set_weights_func(lambda x, y: ((x+y)/2) ** 2)
     
     return options
+
+def update_constants(options):
+    # lazy way of updating constants
+    # I don't advise this method in general
+    # it might be better to just have a class in the future
+    # that can update its own values...
+    for opt in dir(c):
+        if options.get(c):
+            logger.debug(
+                'Overriding default value of %s (%s) with %s' % (
+                    opt,
+                    ascii(getattr(c, opt)),
+                    ascii(options.get(opt)),
+                )
+            )
+            setattr(c, opt, options.get(opt))
+            if opt == 'RASTER_SIZE_M':
+                RASTER_SIZE_LAT = options['RASTER_SIZE_M']/111000
+            if opt in ['RASTER_SIZE_M','RASTER_MANHATTAN_DISTANCE_MAX']:
+                c.BBOX_INCREASE_LAT=(c.RASTER_MANHATTAN_DISTANCE_MAX + 1) * c.RASTER_SIZE_LAT
+            if opt == 'RASTER_METHOD':
+                c.RASTER_FUNCTION = c.RASTER_FUNCTIONS[c.RASTER_METHOD]    
 
 def filter_bad_data(
         files,
@@ -258,6 +359,7 @@ def main(options):
         options,
     )
     logger.info('Calculated similarities')
+    write_grouper_to_disk(grouper, options)    
 
     if options['add_directional_similarity']:
         rasterize_directional(data, grouper)
@@ -270,6 +372,7 @@ def main(options):
         )
         
         logger.info('Calculated directional similarities')
+        write_grouper_to_disk(grouper, options, directional=True)
 
     else:
         directional_similarity_data = None
@@ -283,6 +386,28 @@ def main(options):
 
 
     logger.info('Done!')
+
+def write_grouper_to_disk(grouper, options, directional=False):
+    if options['rasterized_output_prefix']:
+        logger.info(
+            'Writing data from grouper to disk. Concatenating first, which may take a '
+            'while. Directional: %s' % directional
+        )
+        df_dict = grouper.groups_to_df_dict()
+        prefix = options['rasterized_output_prefix']
+        if directional:
+            prefix = '%s_directional' % prefix
+            
+        filenames = {
+            k: '%s_%s.csv' % (prefix, k)
+            for k in ['groups','members','members_ids']
+        }
+        for k, fn in filenames.items():
+            logger.info('Writing %s to disk' % fn)
+            df_dict[k].to_csv(
+                fn,
+                index=False
+            )    
         
 
 # python3 calculate_similarities.py ../fit_conversion/subject_data/spriesdaddy/fit_csv/
@@ -345,20 +470,20 @@ def write_results_to_disk(
 
         if map_df is None:
             map_df = pd.DataFrame({})
-        elif 'filename' not in map_df.columns or 'id' not in columns:
+        elif 'filename' not in map_df.columns or 'id' not in map_df.columns:
             logger.error('Cannot find "id" or "filename" columns in map file. Skipping')
         else:
             try:
                 logger.info('merging df with map file')
                 map_df = map_df[['filename','id']]
                 df = df.merge(
-                    map_df.rename({'id':'id1'}),
+                    map_df.rename({'id':'id1'}, axis=1),
                     how='left',
                     left_on='fn1',
                     right_on='filename'
                 )
                 df = df.merge(
-                    map_df.rename({'id':'id2'}),
+                    map_df.rename({'id':'id2'}, axis=1),
                     how='left',
                     left_on='fn2',
                     right_on='filename'
