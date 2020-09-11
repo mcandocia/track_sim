@@ -460,7 +460,7 @@ def write_results_to_disk(
         df['fn2'] = df['fn2'].str.replace(sub_regex,'')
 
     if options['map_filename']:
-        cols.extend(['id1','id2'])
+
         logger.info('Attempting map of column filenames with external CSV')
         try:
             map_df = pd.read_csv(options['map_filename'])
