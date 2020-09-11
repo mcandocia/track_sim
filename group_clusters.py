@@ -7,6 +7,34 @@ import pandas as pd
 
 logger = Clogger('group_clusters.log')
 
+
+def raster_dict_to_df(
+        raster_dict,
+        directional=False,
+):
+    data = []
+    if directional:
+        for bins, d in raster_dict.items():
+            lat_bin, long_bin = bins
+            for i in range(len(d['weight_history'])):
+                data.append({
+                    'lat_bin': lat_bin,
+                    'long_bin': long_bin,
+                    'weight': d['weight_history'][i],
+                    'angle': d['angle_history'][i],
+                    'bin_ord': i,
+                })
+    else:
+        for bins, d in raster_dict.items():
+            lat_bin, long_bin = bins
+            data.append({
+                'lat_bin': lat_bin,
+                'long_bin': long_bin,
+                'sum_weight': d['sum_weight'],
+                'sum_unit_weight': d['sum_unit_weight'],
+            })
+    return pd.DataFrame(data)
+
 def bbox_intersection(
         d1,
         d2,
@@ -95,7 +123,7 @@ class Group:
                 np.median([
                     np.mean(m['bbox']['lat'])
                     for m in self.members
-                ])
+                ]) * c.PI/180
             ),
         }
 
@@ -116,9 +144,11 @@ class Group:
 
     def make_raster_dfs(
             self,
-            group_idx=-1
+            group_idx=-1,
+            directional=False
     ):
         df_list = []
+        rd_df_list = []
 
         member_id_df = pd.DataFrame([
             {
@@ -133,11 +163,26 @@ class Group:
             df['member_id'] = i
             df['group_id'] = group_idx
             df_list.append(df)
+
+            if directional:
+                rd_df = raster_dict_to_df(
+                    member['directional_raster_dict'],
+                    directional=directional
+                )
+            else:
+                rd_df = raster_dict_to_df(
+                    member['raster_dict'],
+                    directional=directional
+                )
+            rd_df['member_id'] = i
+            rd_df['group_id'] = group_idx
+            rd_df_list.append(rd_df)
             
 
         return {
-            'members': pd.concat(df_list, ignore_index=True).reset_index(),
+            'members': pd.concat(df_list, ignore_index=True).reset_index(drop=True),
             'members_id': member_id_df,
+            'members_expanded': pd.concat(rd_df_list, ignore_index=True).reset_index(drop=True),
         }
             
                 
@@ -288,14 +333,17 @@ class GroupProcessor:
                 )
         return all_pairs
 
-    def groups_to_df_dict(self):
+    def groups_to_df_dict(self, directional=False):
         member_dataframes = []
         group_dataframes = []
         member_id_dataframes = []
+        member_expanded_dataframes = []
+        
         for i, group in enumerate(self.groups):
             
             member_df_dict = group.make_raster_dfs(
                 group_idx=i,
+                directional=directional,
             )
 
             member_dataframes.append(
@@ -305,6 +353,10 @@ class GroupProcessor:
             member_id_dataframes.append(
                 member_df_dict['members_id']
             )
+
+            member_expanded_dataframes.append(
+                member_df_dict['members_expanded']
+            )
             
 
             group_dataframes.append(
@@ -313,18 +365,22 @@ class GroupProcessor:
 
         #print(member_dataframes)            
         # data for each member
-        members_df =  pd.concat(member_dataframes, ignore_index=True).reset_index()
+        members_df =  pd.concat(member_dataframes, ignore_index=True).reset_index(drop=True)
 
         # members ID
-        members_id_df = pd.concat(member_id_dataframes, ignore_index=True).reset_index()
+        members_id_df = pd.concat(member_id_dataframes, ignore_index=True).reset_index(drop=True)
 
         # data describing groups
-        groups_df = pd.concat(group_dataframes, ignore_index=True).reset_index()
+        groups_df = pd.concat(group_dataframes, ignore_index=True).reset_index(drop=True)
+
+        # expanded raster path
+        members_expanded_df = pd.concat(member_expanded_dataframes, ignore_index=True).reset_index(drop=True)
 
         return {
             'groups': groups_df,
             'members': members_df,
             'members_ids': members_id_df,
+            'members_expanded': members_expanded_df,
         }
 
         

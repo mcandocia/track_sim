@@ -393,14 +393,14 @@ def write_grouper_to_disk(grouper, options, directional=False):
             'Writing data from grouper to disk. Concatenating first, which may take a '
             'while. Directional: %s' % directional
         )
-        df_dict = grouper.groups_to_df_dict()
+        df_dict = grouper.groups_to_df_dict(directional=directional)
         prefix = options['rasterized_output_prefix']
         if directional:
             prefix = '%s_directional' % prefix
             
         filenames = {
             k: '%s_%s.csv' % (prefix, k)
-            for k in ['groups','members','members_ids']
+            for k in ['groups','members','members_ids','members_expanded',]
         }
         for k, fn in filenames.items():
             logger.info('Writing %s to disk' % fn)
@@ -460,7 +460,7 @@ def write_results_to_disk(
         df['fn2'] = df['fn2'].str.replace(sub_regex,'')
 
     if options['map_filename']:
-
+        cols.extend(['id1','id2'])
         logger.info('Attempting map of column filenames with external CSV')
         try:
             map_df = pd.read_csv(options['map_filename'])
