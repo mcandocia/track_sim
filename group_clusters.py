@@ -4,6 +4,7 @@ import json
 import numpy as np
 from utility import Clogger
 import pandas as pd
+import re
 
 logger = Clogger('group_clusters.log')
 
@@ -119,7 +120,7 @@ class Group:
                 v-1 for v in
                 Counter([m['filename'] for m in self.members]).values()
             ]),
-            'long_raster_size': c.RASTER_SIZE_LAT * np.cos(
+            'long_raster_size': c.RASTER_SIZE_LAT / np.cos(
                 np.median([
                     np.mean(m['bbox']['lat'])
                     for m in self.members
@@ -127,8 +128,10 @@ class Group:
             ),
         }
 
-    def to_df(self):
-        return pd.DataFrame([self.summary()])
+    def to_df(self, group_id=-1):
+        summary = self.summary()
+        summary['group_id'] = group_id
+        return pd.DataFrame([summary])
 
     def pairwise_iter(self):
         n_groups = len(self.members)
@@ -144,16 +147,23 @@ class Group:
 
     def make_raster_dfs(
             self,
-            group_idx=-1,
-            directional=False
+            group_id=-1,
+            directional=False,
+            options={}
     ):
         df_list = []
         rd_df_list = []
 
+        if options.get('truncate_file_path'):
+            fn_trans = lambda x: re.sub('.*/','', x)
+        else:
+            fn_trans = lambda x: x
+
         member_id_df = pd.DataFrame([
             {
                 'member_id': i,
-                'filename': member['filename']
+                'filename': fn_trans(member['filename']),
+                'group_id': group_id,
             }
             for i, member in enumerate(self.members)
         ])
@@ -161,7 +171,7 @@ class Group:
         for i, member in enumerate(self.members):
             df = member['rasterization'].copy()
             df['member_id'] = i
-            df['group_id'] = group_idx
+            df['group_id'] = group_id
             df_list.append(df)
 
             if directional:
@@ -175,7 +185,7 @@ class Group:
                     directional=directional
                 )
             rd_df['member_id'] = i
-            rd_df['group_id'] = group_idx
+            rd_df['group_id'] = group_id
             rd_df_list.append(rd_df)
             
 
@@ -333,7 +343,7 @@ class GroupProcessor:
                 )
         return all_pairs
 
-    def groups_to_df_dict(self, directional=False):
+    def groups_to_df_dict(self, directional=False,options={}):
         member_dataframes = []
         group_dataframes = []
         member_id_dataframes = []
@@ -342,8 +352,9 @@ class GroupProcessor:
         for i, group in enumerate(self.groups):
             
             member_df_dict = group.make_raster_dfs(
-                group_idx=i,
+                group_id=i,
                 directional=directional,
+                options=options,
             )
 
             member_dataframes.append(
@@ -360,7 +371,7 @@ class GroupProcessor:
             
 
             group_dataframes.append(
-                group.to_df()
+                group.to_df(group_id=i)
             )
 
         #print(member_dataframes)            

@@ -268,7 +268,7 @@ def get_metadata(record, fn):
     median_lat = np.median(record['position_lat'])
     cosine_lat = np.cos(PI/180 * median_lat)
 
-    bbox_increase_long = c.BBOX_INCREASE_LAT * cosine_lat
+    bbox_increase_long = c.BBOX_INCREASE_LAT / cosine_lat
     
     bbox = {
         'lat': [
@@ -306,7 +306,7 @@ def add_directions(data, options):
         diffs = diffs.dropna().reset_index().append(
             diffs.iloc[[-1] * c.ANGLE_LAG_SECONDS].reset_index()
         ).reset_index()
-        diffs['position_long'] = diffs['position_long'] * lon_lat_ratio
+        diffs['position_long'] = diffs['position_long'] / lon_lat_ratio
         record['angle'] = np.arctan2(
             diffs['position_lat'],
             diffs['position_long']
@@ -393,7 +393,7 @@ def write_grouper_to_disk(grouper, options, directional=False):
             'Writing data from grouper to disk. Concatenating first, which may take a '
             'while. Directional: %s' % directional
         )
-        df_dict = grouper.groups_to_df_dict(directional=directional)
+        df_dict = grouper.groups_to_df_dict(directional=directional, options=options)
         prefix = options['rasterized_output_prefix']
         if directional:
             prefix = '%s_directional' % prefix
