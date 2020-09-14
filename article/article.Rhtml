@@ -1,0 +1,354 @@
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML">
+</script>
+
+<!--begin.rcode setup, message=FALSE, warning=FALSE, echo=FALSE
+source('setup.r')
+source('color_compass.r')
+end.rcode-->
+
+<h2> Overview </h2>
+
+<p> Measuring the closeness of two paths on a map is a tricky task. There's no universal algorithm to measure similarity, and the nature of the task itself depends on the purpose and the data.</p>
+
+<p> I run quite a bit, and with my 600+ runs I've measured on my Garmin GPS watch, I would like to be able to know/visualize the following: </p>
+
+<div id="sim_goals_div">
+  <ol id="sim_goals_ol">
+    <li> Which of my runs are "repeats" of each other. That is, they are very similar in path.</li>
+    <li> Which of my runs are the "reverse" of each other? This usually means the reverse of a loop, but it applies to other shapes, too.</li>
+    <li> How similar are my runs to each other over time? How much do my routes vary? </li>
+  </ol>
+</div>
+
+<p> With a python script utilizing rasterization, that is, placing latitude &amp; longitude points into discrete bins, I will show how this can be done with two similarity metrics: one that doesn't take direction into account, and one that does.</p>
+
+<p><i> Note: The underlying code for this is a bit complicated, so it is not shown here, but it is available on my <a href="https://github.com/mcandoc/track_sim" id="github_tracksim_out" target="_blank">GitHub</a>.</i></p>
+
+<h2> Results </h2>
+
+<p> The algorithm is a bit tedious, so I will show the results here, which are motivated by the similarities calculated by the algorithms in the below sections. </p>
+
+<h3> Identifying Running Route Patterns </h3>
+
+<p> A lot of my runs are similar routes. A few of them are fixed-distance, but others are out-and-back, where I will pick a general route, and then follow it until I am halfway done, and then I turn back along the same route.</p>
+
+<p> Using similarity, I can visualize how my runs relate to each other over time in terms of what routes I take.</p>
+
+<!--begin.rcode tile_sim, message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=10
+print(
+ggplot(
+  similarity_df %>% 
+    complete(id1,id2,fill=list(similarity=0, directional_similarity=0)) %>%
+    inner_join(
+      run_summary_simple_df %>%
+        transmute(id1=event_id, date1=date)
+    ) %>%
+    inner_join(
+      run_summary_simple_df %>%
+        transmute(id2=event_id, date2=date)
+    )
+  ) + 
+  geom_tile(aes(x=id1, y=id2, fill=similarity)) + 
+  scale_fill_gradientn(colors=cet_pal(7, 'inferno')) +
+  ggtitle('Similarity of my runs, 2017-2020') + 
+  xlab('Run #') + ylab('Run #') +
+  theme_bw()
+)
+end.rcode-->
+
+<p> A lot of my runs are similar, as they go along the Chicago Lakefront Trail. These are the yellow/red-orange streaks throughout the graph. Yellow dots are the ones that have the closest distance to each other. </p>
+<p> You can also see where my route change, since the trail was closed from March through the early summer this year on order of the mayor. Even since it's opened I've avoided it for the most part, and I've found new routes that I can run on, since the trail is still too crowded for my liking most of the time.</p>
+
+<p> An alternate take on this is by looking at the graph over time rather than run #: </p>
+
+<!--begin.rcode time_tile_sim, message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=10
+ggplot(
+  similarity_df %>% 
+    complete(id1,id2,fill=list(similarity=0, directional_similarity=0)) %>%
+    inner_join(
+      run_summary_simple_df %>%
+        transmute(id1=event_id, date1=as.POSIXct(date))
+    ) %>%
+    inner_join(
+      run_summary_simple_df %>%
+        transmute(id2=event_id, date2=as.POSIXct(date))
+    )
+) + 
+  geom_tile(aes(x=date1, y=date2, fill=similarity)) + 
+  scale_fill_gradientn(colors=cet_pal(7, 'inferno')) +
+  ggtitle('Similarity of my runs over time') + 
+  xlab('Run Date') + ylab('Run Date') + 
+  scale_x_datetime(
+    breaks=quarterly_seq,
+    label=function(x) strftime(x, '%Y-%m')
+  ) + 
+  scale_y_datetime(
+    breaks=quarterly_seq,
+    label=function(x) strftime(x, '%Y-%m')
+  ) + theme_dark() +
+  theme(axis.text.x = element_text(angle=90),
+        panel.background = element_rect(fill="#112233"),
+        panel.grid.minor=element_blank()) 
+  
+end.rcode-->
+
+<p> Since there were periods of time I did not run&mdash;usually due to sickness or injury, or just rest days in general&mdash;there are a lot of gaps that you can see. I've also darkened the background to accentuate the higher values. </p>
+
+<h2> Algorithms </h2>
+<h3> Grouping </h3>
+
+<p> The first step, which is relatively simple, is grouping different tracks together, so that there are clusters of tracks that do not touch each other at all between clusters. This is primarily done so that I can use the median latitude of each group as the basis for the longitudinal width of the bins within a group. If I didn't, then if I had a track near the equator, those bins would be about 40% wider than ones in Wisconsin.</p>
+
+<p> Steps: </p>
+
+<div id="grouping_steps_div">
+  <ol id="grouping_steps_ol">
+    <li> Calculate the bounding box of each track, i.e., the minimum and maximum longitude and latitude of each track. </li>
+    <li> Increase the size of the box by an amount equal to the maximum distance that you want to consider two tracks "touching" each other. The motivation for this will be explained in the next section </li>
+    <li> For the first track, assign it to a new group </li>
+    <li> For each remaining track, assign it to an existing group if its bounding box overlaps with any member of that group. Otherwise create a new group with just that member </li>
+    <li> Once all tracks are assigned a group, for each group, check to see if any members of that group overlap with any members of another group. If one is found, then merge the two groups </li>
+    <li> Repeat step 5 until no new merges are made </li>
+    <li> Calculate the median longitude of each group's members. This doesn't have to be super-precise, but this is the basis for mapping points of the tracks to the grid. </li>
+  </ol>
+</div>
+
+<p> Once this step is done, rasterization can begin </p>
+
+<h3> Rasterization </h3>
+
+<p> The second step in this process is <i>rasterization</i> of all of the points. For the examples here, I place each point into a <i>roughly</i> 15-meter by 15-meter bin. I say roughly because as latitude changes, the number of miles/kilometers per degree longitude changes, and because I want these tiles to line up with each other on a rectangular grid, the east-west length of each of the bins varies slightly for different degrees of latitude </p>
+
+<p> An example of what this looks like on a map with a 15-meter by 15-meter grid is the following run from back in 2018:</p>
+
+<!--begin.rcode raster_example, echo=FALSE, message=FALSE, warning=FALSE, fig.height=10, fig.width=10
+  df = rasters_df %>%
+    inner_join(
+      members_ids_df %>%
+      inner_join(
+          mapfile_df
+      ) %>%
+        filter(id == 127)
+    ) %>%
+   raster_transform()
+
+  map_127 = get_map(
+    location=get_bbox(df),
+    source='stamen', 
+    maptype='toner', 
+    force=TRUE
+  )
+  
+  print(
+    ggmap(map_127) + 
+      geom_tile(
+        data=df,
+        aes(x=long_center, y=lat_center),
+        alpha=0.8
+      ) + 
+      ggtitle('Rasterized run, 2018-06-25')
+  )
+end.rcode-->
+
+<p> Note how even along straight streets, the points on the rasterized grid go up and down due to shakiness in GPS data. For the most part, my actual running does not vary this much. It is just a natural artifact of small amounts of GPS error that end up bouncing points across the borders of different bins. </p>
+
+<p> The way I resolve this problem is by measuring a certain distance out from each bin. For computational ease, I use all bins on a grid a certain <a href="https://en.wikipedia.org/wiki/Taxicab_geometry" id="wiki_manhattan_out" target="_blank">Manhattan distance</a>, from the others. As opposed to our normal way of measuring distance, where we use the Pythagorean theorem 
+
+$$ d^2 \sqrt{x^2 + y^2} $$ 
+
+we instead use
+
+$$ d = x + y $$
+
+<p> For our purposes, there isn't much of an advantage of doing it this way apart from simplifying calculations and making the code run faster. The only noticeable effect is that diagonal paths (NE/NW/SE/SW) are more vulnerable to error than N/S/E/W paths. An example of the above map using 5 additional bins away from the center, for a maximum width of \(15 \frac{m}{bin} \times 9\;bins = 135m\), which is wide, but useful for measuring similarity. <p>
+
+<!--begin.rcode raster_expanded_example, echo=FALSE, message=FALSE, warning=FALSE, fig.height=10, fig.width=10
+  df = rasters_edf %>%
+    inner_join(
+      members_ids_df %>%
+      inner_join(
+          mapfile_df
+      ) %>%
+        filter(id == 127)
+    ) %>%
+   raster_transform()
+
+  # already retrieved
+  #map_127 = get_map(
+  #  location=get_bbox(df),
+  #  source='stamen', 
+  #  maptype='toner', 
+  #  force=TRUE
+  #)
+  
+  print(
+    ggmap(map_127) + 
+      geom_tile(
+        data=df,
+        aes(x=long_center, y=lat_center),
+        alpha=0.8
+      ) + 
+      ggtitle('Rasterized run with widened grid, 2018-06-25')
+  )
+end.rcode-->
+
+<p> As you can see, it is much wider, and it looks more "straight", in spite of the wobbles in the data. </p>
+
+<h3> Non-directional Similarity </h3>
+
+<p> The simpler version of similarity does not take direction into account. Instead, it looks at the overlaps of each points, as well as assigning weights to each point. Weights are assigned as follows: </p>
+
+<div id="nondirectional_sim_explanation_div">
+  <ol id="nondirectional_sim_explanation_ol">
+    <li> First, choose a certain amount of time to allow the same bins to be traversed before traversing that bin again counts as "overlap". I use 60 seconds, since it corresponds to about a 12 minutes per mile pace to clear 135 meters. </li>
+    <li> Second, define a <i>weight function</i> to describe how much weight should be given to a bin based on its Manhattan distance to the center bin. This can be tricky, but I chose to have very high weights for all except the outermost bins. </li>
+    <li> For each track, calculate the weight of each bin by iterating through each point in time, and for each bin,
+      <ul>
+        <li> If at a point in time, the track hs not been encountered within the 60-second window, increment its weight by the appropriate value and make note of that value </li>
+        <li> If the point has been encountered within that time, but the weight is greater than the previous weight recorded, reset the 60-second window to start at that time point, and increase its weight by the difference of the weights, making note of the higher weight
+      <ul>
+    </li>
+    <li> For each track, calculate the <i>norm</i>, which is the square root of the sum of the squares of each bin.</li>
+    <li> For each pair of tracks within a group, for each shared bin, add the products of the two weights for each of the bins. Divide that product by the product of the norms of those tracks.</li>
+  </ol>
+</div>
+
+<p> Below is an example of 3 routes, with the accompanying similarity matrix, where 0 = no similarity and 1 = identical. </p>
+
+<!--begin.rcode nd_similarity_example, echo=FALSE, message=FALSE, warning=FALSE, figure.width=10, figure.height=10
+
+  IDS = c(127, 175, 270)
+  ndsim_df = rasters_edf %>%
+    inner_join(
+      members_ids_df %>%
+      inner_join(
+          mapfile_df
+      ) %>%
+        filter(id %in% IDS)
+    ) %>%
+   raster_transform()
+  
+   map_ndsim = get_map(
+    location=get_bbox(ndsim_df),
+    source='stamen', 
+    maptype='toner', 
+    force=TRUE
+  )
+   
+  print(
+    ggmap(map_ndsim) + 
+      geom_tile(
+        data=ndsim_df,
+        aes(x=long_center, y=lat_center,fill=factor(id), alpha=pmax(sqrt(sum_weight)/2, 1/2))
+      ) + 
+      ggtitle('Three runs',subtitle='transparency correlates to weight') + 
+        scale_alpha_identity() + 
+       scale_fill_discrete('Run ID')
+  )
+end.rcode-->
+
+<h4> Similarity Matrix</h4>
+<!--begin.rcode nd_simmat, echo=FALSE, warning=FALSE, message=FALSE, results='asis'
+cat(
+  similarity_df %>% 
+  filter(id1 %in% IDS, id2 %in% IDS) %>% 
+  select(id1, id2, similarity) %>% 
+  reshape2::dcast(id1 ~ id2, value.var='similarity') %>%
+  knitr::kable(format='html', digits=2) %>%
+    add_html_id('simmat')
+)
+end.rcode-->
+
+<p> As you can see, the two tracks in the southern half of the map have a high correlation of 0.92, while the the one on the top only shares a correlation of about 0.28 with the others. </p>
+
+
+<h3> Directional Similarity </h3>
+
+<p> A more complicated way of comparing two paths is by taking direction into account. The way I wanted to define this similarity is one that would result in the following scenarios: </p>
+
+<div id="ds_scenarios_div">
+  <ol id="ds_scenarios_ol">
+    <li> If two paths perfectly overlap in the same direction half the time, and then abruptly diverge, the similarity is \(0.5\) </li>
+    <li> If two paths are identical circles, except one is clockswise and the other is counterclockwise, the similarity is \(-1\) </li>
+    <li> If two paths are back-and-forth paths, and one goes east-west-east, and the other west-east-west, the similarity should be roughly \(-1\) </li>
+  </ol>
+</div>
+
+<p> Yes, I know similarity should not be negative, but it the simplest term I can think of for it.</p>
+
+<p> Regardless, given the above, the algorithm is very similar to the one for non-directional similarity. However, the following changes must be made: </p>
+
+<div id="ds_changes_div">
+  <ol id="ds_changes_ol">
+    <li> Instead of adding weights across different 60-second time frames for a given bin, a new "entry" is created in a list for that bin, so the weight and angle of that bin can be recorded for each window </li>
+    <li> The direction/angle of each bin is calculated using the transform $$ \text{average angle} = \text{atan2}\left(\sum{\sin(angle)}, \sum{\cos(angle)}\right)$$  </li>
+    
+    <li> When calculating the norms and similarities, they are done element-wise, <b>in-order</b> for each "entry" of each bin. The cosine between the two angles of the bins is multiplied by the weights of each of the bins, and these products are added together. If one track has more entries in a bin than another track, then any entries beyond the length of the shortest's are skipped. </li>
+    <li> To calculate the angle, I used a 5-second lag between points to help de-noise wobbles in the data. A longer delay may be appropriate, although this also means the end of the track is forward-filled with the last calculable angle more</li>
+  </ol>
+</div>
+
+<p> An example of what one of these tracks looks like with the direction included in the bin (for the first instance of each bin): </p>
+
+<!--begin.rcode directional_raster_example, echo=FALSE, warning=FALSE, message=FALSE, fig.height=10, fig.width=10
+ df = drasters_edf %>%
+    inner_join(
+      members_ids_df %>%
+      inner_join(
+          mapfile_df
+      ) %>%
+        filter(id == 127)
+    ) %>%
+   raster_transform()
+
+dmap = ggmap(map_127) + 
+  geom_tile(data=df, aes(
+    x=long_center, y=lat_center, fill=((angle-pi/2) * 180/pi) %% (360), alpha=weight
+  )) +
+  scale_fill_gradientn(
+      colors=cetcolor::cet_pal(8, 'c2'),
+      breaks=seq(0,315,45),
+      limits=c(0,359)
+    ) +
+  scale_alpha_identity() +
+  guides(fill=FALSE, alpha=FALSE) + 
+  ggtitle('Directional raster example, run on 2018-06-25')
+
+grid.arrange(
+  dmap, 
+  color_compass,
+  widths=c(3,1)
+)
+
+end.rcode-->
+<p> Note that there are some artifacts from changing directions, as well as stopping and starting again slightly behind where the stop was. Adding direction makes this quite a bit noisier, and difficult to compare. Here's the similarity matrix for the 3 example tracks from the non-directional example:<p>  
+
+<h4> Directional Similarity Matrix</h4>
+<!--begin.rcode d_simmat, echo=FALSE, warning=FALSE, message=FALSE, results='asis'
+cat(
+  similarity_df %>% 
+  filter(id1 %in% IDS, id2 %in% IDS) %>% 
+  select(id1, id2, directional_similarity) %>% 
+  reshape2::dcast(id1 ~ id2, value.var='directional_similarity') %>%
+  knitr::kable(format='html', digits=2) %>%
+    add_html_id('directional_simmat')
+)
+end.rcode-->
+
+<p> You can see that run #270 has a negative similarity to the other ones. This is a result of the run starting east on the road that's traveled westward for the other runs.</p>
+
+<h2> Possible Changes in Future </h2>
+
+<ol>
+  <li> Apply a transform to each individual bin's weight for non-directional transforms to reduce the effect of overlap. I think a square-root transform for values above 1 would be ideal. </li>
+  <li> 
+  <li> Use Euclidean distance for more consistency </li>
+  <li> Use a more forgiving angle-difference metric (e.g., pull values near 0 and 180 degrees closer to those values) </li>
+</ol>
+
+<h2> GitHub </h2>
+<p> <a href="https://github.com/mcandocia/track_sim" id="github_tracksim_out" target="_blank">https://github.com/mcandocia/track_sim</a></p>
+
+<h2> Citations </h2>
+<p> D. Kahle and H. Wickham. ggmap: Spatial Visualization with ggplot2. The R Journal, 5(1), 144-161. URL <a href="http://journal.r-project.org/archive/2013-1/kahle-wickham.pdf" target="_blank" id="journal_r_ggspatial_out">http://journal.r-project.org/archive/2013-1/kahle-wickham.pdf</a> </p>
