@@ -1,5 +1,9 @@
 # Track Similarity
 
+## Article
+
+See [https://maxcandocia.com/article/2020/Sep/13/run-path-similarity/](https://maxcandocia.com/article/2020/Sep/13/run-path-similarity/) for an explanation of the algorithm and some sample results.
+
 ## Overview
 
 This script will calculate the similarity of GPS-based tracks, using direction-agnostic similarity (for detecting congruent routes) as well as direction-based similarity (for detecting directionally-congruent routes and their reverses).
@@ -62,11 +66,17 @@ Other arguments:
 
 * `--remove-filenames` - Remove filenames from output file. I only recommend this if you have `--map-filename` specified.
 
+* '--rasterized-output-prefix' - Prefix for file path if you want raster information + grouping information outputted. This should include the path, too.
+
 * `--no-filter` - Do not filter out `*laps*` or `*starts*`-patterned files. 
 
 * `--weight-smooth` - Uses square of average of nonzero weights rather than multiplying them to increase similarity and effects of overlap.
 
 * `--weight-center-only` - EXPERIMENTAL. Requires a weight of 1 in at least 1 track when computing similarities, but has issues when comparing events that have a lot of tightly interwoven paths (e.g., running on a pill-shaped track). I can't quite get the effect to work well, especially for non-directional. Workaround: set `--weight-smooth` and use a max manhattan distance of 4 with large weights, except for the last one, possibly. Make sure that the bin size is 20-40 meters. This is analagous to measuring the overlap of two slightly off-center markers on a sheet of paper.
+
+### Constants Note
+
+Many constants are also parameters, too, in case you don't want to manually adjust `constants.py` to change them. See `python3 tracksim.py --help` for more information.
 
 ## Algorithm (General)
 
